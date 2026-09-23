@@ -9,7 +9,7 @@ import process from "node:process";
 import fs from "node:fs";
 
 import { parseArgs, extractTaskText } from "./lib/args.mjs";
-import { isOpencodeInstalled, getOpencodeVersion, spawnDetached } from "./lib/process.mjs";
+import { isOpencodeInstalled, getOpencodeVersion, resolveOpencodeBinary, spawnDetached } from "./lib/process.mjs";
 import { isServerRunning, ensureServer, createClient, connect } from "./lib/opencode-server.mjs";
 import { resolveWorkspace } from "./lib/workspace.mjs";
 import { loadState, updateState, upsertJob, generateJobId, jobDataPath, jobLogPath } from "./lib/state.mjs";
@@ -306,7 +306,9 @@ async function handleTask(argv) {
     if (resumeSessionId) workerArgs.push("--resume-session", resumeSessionId);
     if (options.model) workerArgs.push("--model", options.model);
 
-    const child = spawnDetached("node", workerArgs, { cwd: workspace, logFile });
+    // process.execPath, not "node": no shell, so taskText stays a literal
+    // argument and child.pid is the worker itself (cancel/auto-heal rely on it).
+    const child = spawnDetached(process.execPath, workerArgs, { cwd: workspace, logFile });
     upsertJob(workspace, { id: job.id, pid: child.pid });
     console.log(`OpenCode task started in background: ${job.id}`);
     console.log("Check `/opencode:status` for progress.");
@@ -818,18 +820,18 @@ async function handleDoctor(argv) {
   const push = (name, status, detail, hint) => checks.push({ name, status, detail, hint });
 
   // 1. opencode binary in PATH
-  const which = await runCommand("which", ["opencode"]).catch(() => ({ exitCode: 1, stdout: "" }));
-  if (which.exitCode === 0 && which.stdout.trim()) {
-    push("opencode-binary", "PASS", which.stdout.trim(), null);
+  const bin = await resolveOpencodeBinary();
+  if (bin) {
+    push("opencode-binary", "PASS", bin, null);
   } else {
     push("opencode-binary", "FAIL", "not in PATH",
       "Install: npm i -g opencode-ai  OR  brew install opencode");
   }
 
   // 2. opencode version
-  const ver = await runCommand("opencode", ["--version"]).catch(() => ({ exitCode: 1, stdout: "" }));
-  if (ver.exitCode === 0) {
-    push("opencode-version", "PASS", ver.stdout.trim() || "(unknown)", null);
+  const ver = await getOpencodeVersion().catch(() => null);
+  if (ver !== null) {
+    push("opencode-version", "PASS", ver || "(unknown)", null);
   } else {
     push("opencode-version", "WARN", "could not resolve version", null);
   }

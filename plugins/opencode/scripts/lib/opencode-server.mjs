@@ -10,6 +10,7 @@ import { spawn, spawnSync } from "node:child_process";
 export { probeSessionTerminal } from "./auto-heal.mjs";
 import { ensureOpencodeConfig } from "./opencode-config.mjs";
 import { classifyError } from "./errors.mjs";
+import { opencodeSpawnSpec } from "./process.mjs";
 
 const IS_WINDOWS = process.platform === "win32";
 const DEFAULT_PORT = 4096;
@@ -124,12 +125,13 @@ export async function ensureServer(opts = {}) {
   }
 
   // Start the server
-  // Windows npm shims are .cmd/.ps1; spawn() only resolves those via a shell.
-  const proc = spawn("opencode", ["serve", "--port", String(port)], {
+  const spec = await opencodeSpawnSpec(["serve", "--port", String(port)]);
+  const proc = spawn(spec.command, spec.args, {
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
     cwd: opts.cwd,
-    shell: IS_WINDOWS,
+    shell: spec.shell,
+    windowsHide: true,
   });
   proc.unref();
 
