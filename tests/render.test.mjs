@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { renderStatus, renderResult, renderReview, renderSetup } from "../plugins/opencode/scripts/lib/render.mjs";
+import { renderStatus, renderResult, renderReview, renderSetup, renderTrace } from "../plugins/opencode/scripts/lib/render.mjs";
 
 describe("renderStatus", () => {
   it("renders empty state", () => {
@@ -78,5 +78,38 @@ describe("renderResult", () => {
       null
     );
     assert.ok(output.includes("Connection timeout"));
+  });
+});
+
+describe("renderTrace", () => {
+  it("renders one line per event in order", () => {
+    const at = Date.UTC(2026, 0, 1, 12, 0, 5);
+    const output = renderTrace([
+      { type: "user", time: { created: at }, text: "do the thing" },
+      {
+        type: "assistant", time: { created: at },
+        content: [
+          { type: "reasoning", text: "hidden" },
+          { type: "tool", name: "shell", state: { status: "completed", input: { command: "npm test" } } },
+          { type: "text", text: "All green." },
+        ],
+      },
+      { type: "idle", time: { created: at }, outcome: "succeeded" },
+    ]);
+    assert.equal(output, [
+      "[12:00:05] user: do the thing",
+      "[12:00:05] tool/shell/completed: npm test",
+      "[12:00:05] assistant: All green.",
+      "[12:00:05] idle: succeeded",
+    ].join("\n"));
+  });
+
+  it("shows assistant errors", () => {
+    const output = renderTrace([{ type: "assistant", time: { created: 0 }, content: [], error: { message: "403 free tier" } }]);
+    assert.match(output, /error: 403 free tier/);
+  });
+
+  it("handles an empty session", () => {
+    assert.equal(renderTrace([]), "(no activity)");
   });
 });

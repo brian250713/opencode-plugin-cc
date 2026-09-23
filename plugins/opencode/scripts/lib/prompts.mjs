@@ -19,6 +19,7 @@ export async function buildReviewPrompt(cwd, opts, pluginRoot) {
   const status = await getStatus(cwd);
   const changedFiles = await getChangedFiles(cwd, { base: opts.base });
 
+  const schema = readReviewSchema(pluginRoot);
   let systemPrompt;
   if (opts.adversarial) {
     const templatePath = path.join(pluginRoot, "prompts", "adversarial-review.md");
@@ -30,7 +31,31 @@ export async function buildReviewPrompt(cwd, opts, pluginRoot) {
     systemPrompt = buildStandardReviewPrompt(diff, status, changedFiles, opts);
   }
 
-  return systemPrompt;
+  return `${systemPrompt}
+
+${schemaBlock(schema)}`;
+}
+
+/**
+ * Read the JSON schema reviews must return.
+ * @param {string} pluginRoot
+ * @returns {string}
+ */
+function readReviewSchema(pluginRoot) {
+  return fs.readFileSync(path.join(pluginRoot, "schemas", "review-output.schema.json"), "utf8").trim();
+}
+
+/**
+ * The output contract appended to every review prompt. Without it the model
+ * guesses a shape (e.g. `files[].issues`) that renderReview cannot display.
+ * @param {string} schema
+ * @returns {string}
+ */
+function schemaBlock(schema) {
+  return `<output_schema>
+Respond with a single JSON object that validates against this JSON Schema. Use exactly these field names; do not wrap it in prose.
+${schema}
+</output_schema>`;
 }
 
 /**
