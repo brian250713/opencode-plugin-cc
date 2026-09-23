@@ -1,17 +1,17 @@
 // Session-level auto-heal for tracked jobs.
 //
-// Background: task-worker subprocesses wrap `client.sendPrompt(sid, ...)` in
+// Background: task-worker subprocesses wrap `client.runPrompt(sid, ...)` in
 // runTrackedJob so that on successful return the job flips status→completed
-// and the response text is persisted to jobDataPath. But sendPrompt can hang
-// or the worker can be killed before that return happens — even though the
-// OpenCode session itself completed cleanly server-side. The job then stays
+// and the response text is persisted to jobDataPath. But the worker can be
+// killed before that return happens — even though the OpenCode session itself
+// completed cleanly server-side. The job then stays
 // in a non-terminal state ("investigating"/"running") forever and downstream
 // Monitor scripts never see the true finish.
 //
 // This module provides a best-effort reconciliation pass: given a job with
-// an `opencodeSessionId`, query the OpenCode server for the last assistant
-// message in that session. If it looks terminal, upsert the job as completed
-// and persist the text. If the worker process is gone and the session has
+// an `opencodeSessionId`, ask the OpenCode server whether that session went
+// idle after the job started. If so, upsert the job as completed (or failed,
+// per the session outcome) and persist the reply text. If the worker process is gone and the session has
 // been idle long enough, mark as failed with a clear error message.
 //
 // All functions are no-ops (or log to stderr and return the original job)
@@ -23,23 +23,18 @@ import path from "node:path";
 
 import { ensureDir } from "./fs.mjs";
 import { upsertJob, jobDataPath } from "./state.mjs";
+import {
+  DEFAULT_BASE_URL,
+  createClient,
+  isTurnDone,
+  summarizeTurn,
+  describeLastActivity,
+} from "./opencode-server.mjs";
 
-const DEFAULT_BASE_URL = "http://127.0.0.1:4096";
-const STRICT_TERMINAL = process.env.OPENCODE_STRICT_TERMINAL === "1";
 // A worker/session can be legitimately silent for a while (big model thinking,
 // slow tool) — only declare it dead after >60s of no session activity AND no
-// live task-worker process. 60s matches the spec.
+// live task-worker process.
 const STALE_IDLE_MS = 60_000;
-
-function buildHeaders() {
-  const headers = { "Content-Type": "application/json" };
-  if (process.env.OPENCODE_SERVER_PASSWORD) {
-    const user = process.env.OPENCODE_SERVER_USERNAME ?? "opencode";
-    const cred = Buffer.from(`${user}:${process.env.OPENCODE_SERVER_PASSWORD}`).toString("base64");
-    headers["Authorization"] = `Basic ${cred}`;
-  }
-  return headers;
-}
 
 /**
  * True if the given PID is currently alive. Treats missing/invalid PID as dead.
@@ -60,73 +55,35 @@ export function isProcessAlive(pid) {
 }
 
 /**
- * Extract visible text from an OpenCode message `parts` array.
- * @param {Array|undefined} parts
- * @returns {string}
- */
-function extractPartsText(parts) {
-  if (!Array.isArray(parts)) return "";
-  return parts
-    .filter((p) => p?.type === "text" && typeof p.text === "string")
-    .map((p) => p.text)
-    .join("\n");
-}
-
-/**
  * Query the opencode server for the terminal state of a session.
  *
  * Returns:
- *   { terminal: true,  finish, completed, text, info } when the last assistant
- *     message has info.time.completed >= startedAt AND typeof info.finish === 'string'.
- *   { terminal: false, reachable: true, lastUpdatedAt, lastInfo }           when session exists but no terminal marker.
- *   { terminal: false, reachable: false, error }                             when server unreachable / errored.
+ *   { terminal: true, outcome, completed, text, error } when the session went
+ *     idle at or after startedAtMs.
+ *   { terminal: false, reachable: true, lastUpdatedAt } when the session is still running.
+ *   { terminal: false, reachable: false, error }        when server unreachable / errored.
  *
  * @param {string} baseUrl
  * @param {string} sessionId
  * @param {number} startedAtMs - epoch ms; only treat completions >= this as ours
- * @param {object} [headers]
  */
-export async function probeSessionTerminal(baseUrl, sessionId, startedAtMs, headers) {
-  const h = headers ?? buildHeaders();
+export async function probeSessionTerminal(baseUrl, sessionId, startedAtMs) {
+  const client = createClient(baseUrl);
+  let session;
   try {
-    // limit=1 → last message only. On glm-5 / opencode 1.4.x this returns
-    // an array of { info, parts } objects.
-    const res = await fetch(`${baseUrl}/session/${sessionId}/message?limit=1`, {
-      method: "GET",
-      headers: h,
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
-      return { terminal: false, reachable: true, error: `HTTP ${res.status}` };
+    session = await client.getSession(sessionId);
+  } catch (err) {
+    return { terminal: false, reachable: false, error: err.message };
+  }
+  try {
+    const messages = await client.listMessages(sessionId, { limit: 50, order: "desc" });
+    if (isTurnDone(session, startedAtMs || 0)) {
+      const { text, error } = summarizeTurn(messages, startedAtMs || 0);
+      return { terminal: true, outcome: session.outcome, completed: session.time.idle, text, error };
     }
-    const arr = await res.json();
-    const last = Array.isArray(arr) ? arr[arr.length - 1] : null;
-    const info = last?.info;
-    if (!info) {
-      return { terminal: false, reachable: true, lastUpdatedAt: 0, lastInfo: null };
-    }
-
-    const completed = typeof info.time?.completed === "number" ? info.time.completed : 0;
-    const created = typeof info.time?.created === "number" ? info.time.created : 0;
-    const lastUpdatedAt = Math.max(completed, created);
-
-    const looksTerminal =
-      info.role === "assistant" &&
-      completed >= (startedAtMs || 0) &&
-      (STRICT_TERMINAL
-        ? typeof info.finish === "string"
-        : typeof info.finish === "string" || completed > 0);
-
-    if (looksTerminal) {
-      return {
-        terminal: true,
-        finish: info.finish,
-        completed,
-        text: extractPartsText(last.parts),
-        info,
-      };
-    }
-    return { terminal: false, reachable: true, lastUpdatedAt, lastInfo: info };
+    const newest = messages[0]?.time ?? {};
+    const lastUpdatedAt = Math.max(newest.completed ?? 0, newest.streamed ?? 0, newest.created ?? 0, session.time?.updated ?? 0);
+    return { terminal: false, reachable: true, lastUpdatedAt };
   } catch (err) {
     return { terminal: false, reachable: false, error: err.message };
   }
@@ -137,10 +94,9 @@ export async function probeSessionTerminal(baseUrl, sessionId, startedAtMs, head
  * Never throws — returns null on any failure (unreachable, bad response).
  *
  * Return shape:
- *   null                                         — server unreachable / no info
- *   { kind:"tool", tool, command, ageSec }       — last part is a tool call
- *   { kind:"text", text, ageSec }                — last part is text
- *   { kind:"none", ageSec }                      — session has info but empty parts
+ *   null                                         — server unreachable / no activity
+ *   { kind:"tool", tool, command, ageSec }       — latest activity is a tool call
+ *   { kind:"text", text, ageSec }                — latest activity is text
  *
  * @param {string} baseUrl
  * @param {string} sessionId
@@ -148,45 +104,12 @@ export async function probeSessionTerminal(baseUrl, sessionId, startedAtMs, head
  */
 export async function getSessionLastActivity(baseUrl, sessionId) {
   if (!sessionId) return null;
-  const h = buildHeaders();
   try {
-    const res = await fetch(`${baseUrl}/session/${sessionId}/message?limit=1`, {
-      method: "GET",
-      headers: h,
-      signal: AbortSignal.timeout(5_000),
-    });
-    if (!res.ok) return null;
-    const arr = await res.json();
-    const last = Array.isArray(arr) ? arr[arr.length - 1] : null;
-    if (!last) return null;
-    const info = last.info;
-    const parts = Array.isArray(last.parts) ? last.parts : [];
-
-    const updatedMs = Math.max(
-      typeof info?.time?.completed === "number" ? info.time.completed : 0,
-      typeof info?.time?.created === "number" ? info.time.created : 0,
-    );
-    const ageSec = updatedMs ? Math.max(0, Math.floor((Date.now() - updatedMs) / 1000)) : null;
-
-    // Walk backwards to find the most recent meaningful part.
-    for (let i = parts.length - 1; i >= 0; i--) {
-      const p = parts[i];
-      if (!p) continue;
-      if (p.type === "tool") {
-        const tool = p.tool || "tool";
-        let command = "";
-        const input = p.state?.input || p.input || {};
-        if (tool === "bash") command = String(input.command || input.cmd || "");
-        else if (tool === "edit" || tool === "write") command = String(input.filePath || input.file_path || input.path || "");
-        else if (tool === "read") command = String(input.filePath || input.file_path || input.path || "");
-        else command = JSON.stringify(input).slice(0, 120);
-        return { kind: "tool", tool, command: command.slice(0, 80), ageSec };
-      }
-      if (p.type === "text" && typeof p.text === "string" && p.text.trim()) {
-        return { kind: "text", text: p.text.trim().slice(0, 80), ageSec };
-      }
-    }
-    return { kind: "none", ageSec };
+    const messages = await createClient(baseUrl).listMessages(sessionId, { limit: 5, order: "desc" });
+    const act = describeLastActivity(messages);
+    if (!act) return null;
+    const ageSec = act.at ? Math.max(0, Math.floor((Date.now() - act.at) / 1000)) : null;
+    return { ...act, ageSec };
   } catch {
     return null;
   }
@@ -234,13 +157,31 @@ export async function autoHealJob(workspace, job, opts = {}) {
 
   if (probe.terminal) {
     const completedIso = new Date(probe.completed).toISOString();
+
+    if (probe.outcome !== "succeeded") {
+      const errMsg = `OpenCode turn ${probe.outcome}${probe.error ? `: ${probe.error}` : ""}`;
+      if (dryRun) return { job, action: "would-fail", details: { errorMessage: errMsg } };
+      upsertJob(workspace, {
+        id: job.id,
+        status: "failed",
+        completedAt: completedIso,
+        errorMessage: errMsg,
+        healed: true,
+      });
+      return {
+        job: { ...job, status: "failed", errorMessage: errMsg, healed: true },
+        action: "healed-failed",
+        details: { errorMessage: errMsg },
+      };
+    }
+
     const summary = (probe.text || "").slice(0, 500);
     if (dryRun) {
       return {
         job,
         action: "would-complete",
         details: {
-          finish: probe.finish,
+          outcome: probe.outcome,
           completedAt: completedIso,
           textLen: (probe.text || "").length,
         },
@@ -255,12 +196,13 @@ export async function autoHealJob(workspace, job, opts = {}) {
         rendered: probe.text,
         summary,
         healed: true,
-        finish: probe.finish,
+        outcome: probe.outcome,
       };
       fs.writeFileSync(dataFile, JSON.stringify(payload, null, 2), "utf8");
     } catch (err) {
       // Non-fatal: the status transition below is still useful.
-      process.stderr.write(`auto-heal: failed to write data file for ${job.id}: ${err.message}\n`);
+      process.stderr.write(`auto-heal: failed to write data file for ${job.id}: ${err.message}
+`);
     }
 
     upsertJob(workspace, {
@@ -270,12 +212,11 @@ export async function autoHealJob(workspace, job, opts = {}) {
       phase: "completed",
       result: summary || job.result || null,
       healed: true,
-      finish: probe.finish,
     });
     return {
-      job: { ...job, status: "completed", completedAt: completedIso, result: summary, healed: true, finish: probe.finish },
+      job: { ...job, status: "completed", completedAt: completedIso, result: summary, healed: true },
       action: "healed-completed",
-      details: { finish: probe.finish, textLen: (probe.text || "").length },
+      details: { outcome: probe.outcome, textLen: (probe.text || "").length },
     };
   }
 

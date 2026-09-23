@@ -154,6 +154,45 @@ function extractMessageText(msg) {
 }
 
 /**
+ * Render an OpenCode v2 session message list as a one-line-per-event trace.
+ * @param {object[]} messages - oldest first
+ * @returns {string}
+ */
+export function renderTrace(messages) {
+  const clip = (s, n = 200) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+  const lines = [];
+  for (const m of messages ?? []) {
+    const ts = m?.time?.created ? new Date(m.time.created).toISOString().slice(11, 19) : "--:--:--";
+    switch (m?.type) {
+      case "user":
+        lines.push(`[${ts}] user: ${clip(m.text)}`);
+        break;
+      case "assistant":
+        for (const c of m.content ?? []) {
+          if (c?.type === "text" && c.text?.trim()) {
+            lines.push(`[${ts}] assistant: ${clip(c.text)}`);
+          } else if (c?.type === "tool") {
+            const input = c.state?.input ?? {};
+            const detail = input.command ?? input.path ?? input.filePath ?? input.pattern ?? JSON.stringify(input);
+            lines.push(`[${ts}] tool/${c.name}/${c.state?.status ?? "?"}: ${clip(detail, 160)}`);
+          }
+        }
+        if (m.error?.message) lines.push(`[${ts}] error: ${clip(m.error.message)}`);
+        break;
+      case "shell":
+        lines.push(`[${ts}] shell/${m.status}: ${clip(m.command, 160)}`);
+        break;
+      case "idle":
+        lines.push(`[${ts}] idle: ${m.outcome}`);
+        break;
+      default:
+        break;
+    }
+  }
+  return lines.length ? lines.join("\n") : "(no activity)";
+}
+
+/**
  * Render setup status.
  * @param {object} status
  * @returns {string}
@@ -167,12 +206,15 @@ export function renderSetup(status) {
     lines.push(`- **Version**: ${status.version}`);
   }
   if (status.serverRunning !== undefined) {
-    lines.push(`- **Server Running**: ${status.serverRunning ? "Yes" : "No"}`);
+    lines.push(`- **Server Running**: ${status.serverRunning ? "Yes" : "No (started on first use)"}`);
+  }
+  if (status.serverProblem) {
+    lines.push(`- **Server Problem**: ${status.serverProblem}`);
   }
   if (status.providers?.length > 0) {
     lines.push(`- **Configured Providers**: ${status.providers.join(", ")}`);
-  } else if (status.installed) {
-    lines.push(`- **Providers**: None configured. Run \`!opencode providers\` to set up.`);
+  } else if (status.serverRunning) {
+    lines.push(`- **Providers**: None configured. Run \`!opencode auth\` to set up.`);
   }
   if (status.reviewGate !== undefined) {
     lines.push(`- **Review Gate**: ${status.reviewGate ? "Enabled" : "Disabled"}`);

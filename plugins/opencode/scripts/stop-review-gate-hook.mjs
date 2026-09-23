@@ -58,14 +58,11 @@ async function main() {
 
   try {
     const client = await connect({ cwd: workspace });
-    const session = await client.createSession({ title: "Stop Review Gate" });
-
-    const response = await client.sendPrompt(session.id, prompt, {
-      agent: "plan", // read-only review
-    });
+    // `plan` is opencode's read-only agent.
+    const session = await client.createSession({ title: "Stop Review Gate", agent: "plan" });
+    const { text } = await client.runPrompt(session.id, prompt);
 
     // Extract the verdict
-    const text = extractText(response);
     const firstLine = text.trim().split("\n")[0];
 
     if (firstLine.startsWith("BLOCK")) {
@@ -80,17 +77,6 @@ async function main() {
     // On error, allow the stop (don't block on failures)
     console.log(`ALLOW: Review gate error: ${err.message}`);
   }
-}
-
-function extractText(response) {
-  if (typeof response === "string") return response;
-  if (response?.parts) {
-    return response.parts
-      .filter((p) => p.type === "text")
-      .map((p) => p.text)
-      .join("\n");
-  }
-  return JSON.stringify(response);
 }
 
 main().catch((err) => {

@@ -38,7 +38,7 @@ function deriveOwnDataDir() {
 }
 
 /**
- * Compute the state directory root for a workspace.
+ * The plugin-wide state directory, shared by every workspace.
  *
  * Priority:
  *   1. Explicit opt-in via OPENCODE_COMPANION_DATA (per-plugin override)
@@ -47,26 +47,27 @@ function deriveOwnDataDir() {
  *      otherwise ignore it (another plugin may have exported it into our env)
  *   4. Fallback: <os.tmpdir()>/opencode-companion
  *
+ * @returns {string}
+ */
+export function stateBase() {
+  if (process.env.OPENCODE_COMPANION_DATA) {
+    return path.join(process.env.OPENCODE_COMPANION_DATA, "state");
+  }
+  const own = deriveOwnDataDir();
+  const envData = process.env.CLAUDE_PLUGIN_DATA;
+  if (own) return path.join(own, "state");
+  if (envData && /opencode/i.test(path.basename(envData))) return path.join(envData, "state");
+  return path.join(os.tmpdir(), "opencode-companion");
+}
+
+/**
+ * Compute the state directory root for a workspace.
  * @param {string} workspacePath
  * @returns {string}
  */
 export function stateRoot(workspacePath) {
-  let base;
-  if (process.env.OPENCODE_COMPANION_DATA) {
-    base = path.join(process.env.OPENCODE_COMPANION_DATA, "state");
-  } else {
-    const own = deriveOwnDataDir();
-    const envData = process.env.CLAUDE_PLUGIN_DATA;
-    if (own) {
-      base = path.join(own, "state");
-    } else if (envData && /opencode/i.test(path.basename(envData))) {
-      base = path.join(envData, "state");
-    } else {
-      base = path.join(os.tmpdir(), "opencode-companion");
-    }
-  }
   const hash = crypto.createHash("sha256").update(workspacePath).digest("hex").slice(0, 16);
-  return path.join(base, hash);
+  return path.join(stateBase(), hash);
 }
 
 /**

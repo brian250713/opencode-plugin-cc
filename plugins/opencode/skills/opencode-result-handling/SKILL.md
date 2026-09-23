@@ -44,35 +44,23 @@ Returns JSON with `job.status`, `job.phase`, `job.elapsed`, `job.opencodeSession
 
 ### Layer 2: Full tool-call trace (fine, every action)
 
-OpenCode runs a local HTTP server on `http://localhost:4096` that exposes every message and tool call in every session. Hitting the messages endpoint gives you the **complete live trace of what opencode is doing** — bash commands it ran, file reads, edits, assistant reasoning text, tool results. This is the best signal for "what has opencode actually done so far."
+The companion's `trace` subcommand reads the session's messages from the local OpenCode server (it handles the server's Basic auth for you) and prints one line per event — prompts, assistant text, every tool call with its status, shell runs, and the final idle outcome. This is the best signal for "what has opencode actually done so far."
 
 ```bash
-curl -s http://localhost:4096/session/<sessionId>/message
+node "${CLAUDE_PLUGIN_ROOT}/scripts/opencode-companion.mjs" trace <task-id> --limit 20
 ```
 
-Get `<sessionId>` from Layer 1's `job.opencodeSessionId` (format `ses_XXXXXXXXX...`). Returns a JSON array where each element has `.info.role` (`user` / `assistant`) and `.parts[]` with:
-- `type: "text"` → `part.text` is the assistant's reasoning or commentary
-- `type: "tool"` → `part.tool` is the tool name, `part.state.input` is the tool args, `part.state.status` is `pending` / `running` / `completed` / `error`
+`<task-id>` is the companion job id (or pass an OpenCode session id `ses_...` directly). Output looks like:
 
-Typical usage — tail the last N messages for a quick "what is it doing now":
-
-```bash
-curl -s http://localhost:4096/session/<sessionId>/message | python3 -c '
-import json, sys
-msgs = json.load(sys.stdin)
-for m in msgs[-10:]:
-  role = m.get("info", {}).get("role", "?")
-  for p in m.get("parts", []):
-    t = p.get("type")
-    if t == "text":
-      print(f"  [{role}/text] {p.get(\"text\",\"\")[:200]}")
-    elif t == "tool":
-      st = p.get("state", {})
-      inp = st.get("input", {}) or {}
-      cmd = inp.get("command") or inp.get("file_path") or inp.get("pattern") or ""
-      print(f"  [{role}/tool/{p.get(\"tool\")}/{st.get(\"status\")}] {str(cmd)[:160]}")
-'
 ```
+[23:32:30] user: Create a file named e2e.txt ...
+[23:32:36] tool/write/completed: e2e.txt
+[23:32:36] tool/shell/running: npm test
+[23:32:42] assistant: DONE
+[23:32:42] idle: succeeded
+```
+
+Add `--json` for the raw v2 message list. Do not `curl` the server directly — every `/api` route requires the companion's credentials.
 
 ### Layer 3: Bash wrapper output (when subagent tails companion --wait)
 
@@ -81,7 +69,7 @@ When the rescue subagent runs `companion task --wait` via Bash `run_in_backgroun
 ### Which layer to use
 
 - "Is the task still alive / which phase?" → Layer 1 (companion status).
-- "What has opencode actually been doing the last few minutes?" → Layer 2 (session messages via HTTP).
+- "What has opencode actually been doing the last few minutes?" → Layer 2 (`companion trace`).
 - "What did the subagent's shell emit?" → Layer 3 (TaskOutput on the bash-id).
 
 ## When to Ask the User

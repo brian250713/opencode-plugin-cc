@@ -31,7 +31,7 @@ export function pickWindowsBinary(candidates) {
 
 /**
  * Extract the target executable from an npm cmd-shim, e.g.
- *   "%dp0%\node_modules\opencode-ai\bin\opencode.exe"   %*
+ *   "%dp0%\node_modules\@opencode\cli\bin\opencode.exe"   %*
  * Returns null unless the target is an .exe (a node-script shim still needs
  * the shell).
  * @param {string} shimPath
