@@ -3,6 +3,7 @@
 // JSON state file, per-job files and logs.
 
 import crypto from "node:crypto";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureDir, readJson, writeJson } from "./fs.mjs";
@@ -44,7 +45,7 @@ function deriveOwnDataDir() {
  *   2. Self-derived path from script location (correct under normal install)
  *   3. Only trust CLAUDE_PLUGIN_DATA when it already names our own plugin —
  *      otherwise ignore it (another plugin may have exported it into our env)
- *   4. Fallback: /tmp/opencode-companion
+ *   4. Fallback: <os.tmpdir()>/opencode-companion
  *
  * @param {string} workspacePath
  * @returns {string}
@@ -61,7 +62,7 @@ export function stateRoot(workspacePath) {
     } else if (envData && /opencode/i.test(path.basename(envData))) {
       base = path.join(envData, "state");
     } else {
-      base = path.join("/tmp", "opencode-companion");
+      base = path.join(os.tmpdir(), "opencode-companion");
     }
   }
   const hash = crypto.createHash("sha256").update(workspacePath).digest("hex").slice(0, 16);
