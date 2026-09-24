@@ -39,4 +39,4 @@ Key flows:
 
 ## Versioning
 
-Version is duplicated in `package.json`, `.claude-plugin/marketplace.json` (twice), and `plugins/opencode/.claude-plugin/plugin.json`; bump all together. `install.sh` reads the version from `plugin.json` to build the cache path, and the README Quickstart path hardcodes it too.
+Version is duplicated in `package.json`, `.claude-plugin/marketplace.json` (twice), and `plugins/opencode/.claude-plugin/plugin.json`; bump all together. `install.sh` reads the version from `plugin.json` to build the cache path, and the Quickstart path in `README.md` and `README.zh-TW.md` hardcodes it too.
