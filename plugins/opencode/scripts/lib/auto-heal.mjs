@@ -61,6 +61,7 @@ export function isProcessAlive(pid) {
  *   { terminal: true, outcome, completed, text, error } when the session went
  *     idle at or after startedAtMs.
  *   { terminal: false, reachable: true, lastUpdatedAt } when the session is still running.
+ *   { terminal: false, reachable: true, missing: true } when the server has no such session (404).
  *   { terminal: false, reachable: false, error }        when server unreachable / errored.
  *
  * @param {string} baseUrl
@@ -73,6 +74,8 @@ export async function probeSessionTerminal(baseUrl, sessionId, startedAtMs) {
   try {
     session = await client.getSession(sessionId);
   } catch (err) {
+    // 404: the server is fine, the session is gone (deleted on the server).
+    if (err.status === 404) return { terminal: false, reachable: true, missing: true };
     return { terminal: false, reachable: false, error: err.message };
   }
   try {
@@ -217,6 +220,27 @@ export async function autoHealJob(workspace, job, opts = {}) {
       job: { ...job, status: "completed", completedAt: completedIso, result: summary, healed: true },
       action: "healed-completed",
       details: { outcome: probe.outcome, textLen: (probe.text || "").length },
+    };
+  }
+
+  // The server no longer has the session: nothing will ever complete it.
+  if (probe.missing) {
+    if (isProcessAlive(job.pid)) {
+      return { job, action: "skip", reason: "session missing but worker still alive" };
+    }
+    const errMsg = `OpenCode session ${job.opencodeSessionId} no longer exists on the server`;
+    if (dryRun) return { job, action: "would-fail", details: { errorMessage: errMsg } };
+    upsertJob(workspace, {
+      id: job.id,
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      errorMessage: errMsg,
+      healed: true,
+    });
+    return {
+      job: { ...job, status: "failed", errorMessage: errMsg, healed: true },
+      action: "healed-failed",
+      details: { errorMessage: errMsg },
     };
   }
 

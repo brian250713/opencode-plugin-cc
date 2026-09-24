@@ -1,9 +1,17 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { createTmpDir, cleanupTmpDir, setupTestEnv } from "./helpers.mjs";
 import {
+  createClient,
+  waitForServer,
+  acquireStartLock,
+  releaseStartLock,
   resolveCredentials,
   serverAuthPath,
   authHeaders,
@@ -206,5 +214,96 @@ describe("describeLastActivity", () => {
 
   it("skips non-assistant messages", () => {
     assert.equal(describeLastActivity([{ type: "idle", time: { created: 1 } }]), null);
+  });
+});
+
+const SERVER_MODULE = pathToFileURL(path.resolve("plugins/opencode/scripts/lib/opencode-server.mjs")).href;
+
+describe("resolveCredentials across processes", () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTmpDir(); });
+  afterEach(() => { cleanupTmpDir(tmpDir); });
+
+  it("agrees on one password when many processes race to create it", async () => {
+    const script = `import(${JSON.stringify(SERVER_MODULE)}).then((m) => process.stdout.write(m.resolveCredentials().password))`;
+    const env = { ...process.env, OPENCODE_COMPANION_DATA: tmpDir };
+    delete env.OPENCODE_SERVER_PASSWORD;
+    const run = () => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ["-e", script], { env });
+      let out = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.on("error", reject);
+      child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(`exit ${code}`))));
+    });
+    const passwords = await Promise.all(Array.from({ length: 8 }, run));
+    assert.equal(new Set(passwords).size, 1);
+    assert.ok(passwords[0].length >= 24);
+    const leftovers = fs.readdirSync(path.join(tmpDir, "state")).filter((f) => f.endsWith(".tmp"));
+    assert.deepEqual(leftovers, []);
+  });
+});
+
+describe("waitForServer", () => {
+  const base = { url: "http://127.0.0.1:1", credentials: null, timeoutMs: 2000, intervalMs: 10 };
+
+  it("resolves once the server answers", async () => {
+    let calls = 0;
+    const probe = async () => ({ state: ++calls >= 3 ? "ok" : "down" });
+    await waitForServer({ ...base, proc: new EventEmitter(), probe });
+    assert.equal(calls, 3);
+  });
+
+  it("fails fast when the process cannot be spawned", async () => {
+    const proc = new EventEmitter();
+    setImmediate(() => proc.emit("error", new Error("spawn opencode ENOENT")));
+    await assert.rejects(
+      waitForServer({ ...base, proc, probe: async () => ({ state: "down" }) }),
+      /could not start opencode: spawn opencode ENOENT/,
+    );
+  });
+
+  it("fails fast when the server exits before it is ready", async () => {
+    const proc = new EventEmitter();
+    setImmediate(() => proc.emit("exit", 1, null));
+    await assert.rejects(
+      waitForServer({ ...base, proc, probe: async () => ({ state: "down" }) }),
+      /exited before it was ready \(exit code 1\)/,
+    );
+  });
+
+  it("reports a server that rejects the credentials", async () => {
+    await assert.rejects(
+      waitForServer({ ...base, proc: new EventEmitter(), probe: async () => ({ state: "unauthorized" }) }),
+      /rejected the companion's credentials/,
+    );
+  });
+});
+
+describe("server start lock", () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTmpDir(); });
+  afterEach(() => { cleanupTmpDir(tmpDir); });
+
+  it("lets only one holder in until released", () => {
+    const lock = path.join(tmpDir, "start.lock");
+    assert.equal(acquireStartLock(lock), true);
+    assert.equal(acquireStartLock(lock), false);
+    releaseStartLock(lock);
+    assert.equal(acquireStartLock(lock), true);
+  });
+
+  it("breaks a stale lock left by a crashed process", () => {
+    const lock = path.join(tmpDir, "start.lock");
+    fs.mkdirSync(lock);
+    const old = new Date(Date.now() - 10 * 60_000);
+    fs.utimesSync(lock, old, old);
+    assert.equal(acquireStartLock(lock), true);
+  });
+});
+
+describe("createSession --model validation", () => {
+  it("rejects a model without a provider before calling the server", async () => {
+    const client = createClient("http://127.0.0.1:1", { credentials: null });
+    await assert.rejects(client.createSession({ title: "t", model: "gpt-4o" }), /Invalid --model "gpt-4o"/);
   });
 });

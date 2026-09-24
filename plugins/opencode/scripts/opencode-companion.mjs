@@ -17,6 +17,8 @@ import {
   serverAuthPath,
   createClient,
   connect,
+  parseModelRef,
+  invalidModelMessage,
 } from "./lib/opencode-server.mjs";
 import { resolveWorkspace } from "./lib/workspace.mjs";
 import { loadState, updateState, upsertJob, generateJobId, jobDataPath, jobLogPath } from "./lib/state.mjs";
@@ -257,6 +259,10 @@ async function handleTask(argv) {
 
   if (!taskText) {
     console.error("No task text provided.");
+    process.exit(1);
+  }
+  if (options.model && !parseModelRef(options.model)) {
+    console.error(invalidModelMessage(options.model));
     process.exit(1);
   }
 
