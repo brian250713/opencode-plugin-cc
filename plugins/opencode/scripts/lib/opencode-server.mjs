@@ -72,19 +72,43 @@ export function resolveCredentials(opts = {}) {
     };
   }
   const file = serverAuthPath();
+  const saved = readSavedPassword(file);
+  if (saved) return { username: "opencode", password: saved };
+  if (!create) return null;
+
+  // Several companion processes (hooks, workers, parallel Claude sessions) can
+  // get here at once. Write a complete temp file, then hard-link it into place:
+  // link() fails if the target exists, so exactly one password wins and every
+  // process returns what is on disk.
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ password: crypto.randomBytes(24).toString("base64url") }), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  try {
+    fs.linkSync(tmp, file);
+  } catch (err) {
+    if (err.code !== "EEXIST") throw err;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+  const winner = readSavedPassword(file);
+  if (!winner) throw new Error(`Could not read server credentials from ${file}`);
+  return { username: "opencode", password: winner };
+}
+
+/**
+ * @param {string} file
+ * @returns {string|null}
+ */
+function readSavedPassword(file) {
   try {
     const saved = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (typeof saved?.password === "string" && saved.password) {
-      return { username: "opencode", password: saved.password };
-    }
+    return typeof saved?.password === "string" && saved.password ? saved.password : null;
   } catch {
-    // Missing or unreadable — fall through
+    return null;
   }
-  if (!create) return null;
-  const password = crypto.randomBytes(24).toString("base64url");
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ password }), { encoding: "utf8", mode: 0o600 });
-  return { username: "opencode", password };
 }
 
 /**
@@ -193,30 +217,132 @@ export async function ensureServer(opts = {}) {
   if (first.state === "ok") return { url, alreadyRunning: true, credentials };
   if (first.state !== "down") throw new Error(describeProbeFailure(first.state, url));
 
-  const spec = await opencodeSpawnSpec(["serve", "--hostname", host, "--port", String(port)]);
-  const proc = spawn(spec.command, spec.args, {
-    stdio: "ignore",
-    detached: true,
-    cwd: opts.cwd,
-    shell: spec.shell,
-    windowsHide: true,
-    env: {
-      ...process.env,
-      OPENCODE_SERVER_USERNAME: credentials.username,
-      OPENCODE_SERVER_PASSWORD: credentials.password,
-    },
-  });
-  proc.unref();
-
+  // Only one process may spawn the server; the others wait for it to come up.
+  const lock = startLockPath(port);
   const deadline = Date.now() + SERVER_START_TIMEOUT;
-  let last = first;
-  while (Date.now() < deadline) {
+  while (!acquireStartLock(lock)) {
+    const probe = await probeServer(url, credentials);
+    if (probe.state === "ok") return { url, alreadyRunning: true, credentials };
+    if (probe.state !== "down") throw new Error(describeProbeFailure(probe.state, url));
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for another process to start the OpenCode server (lock: ${lock})`);
+    }
     await new Promise((r) => setTimeout(r, 500));
-    last = await probeServer(url, credentials);
-    if (last.state === "ok") return { url, pid: proc.pid, alreadyRunning: false, credentials };
-    if (last.state !== "down") throw new Error(describeProbeFailure(last.state, url));
   }
-  throw new Error(`OpenCode server failed to start within ${SERVER_START_TIMEOUT / 1000}s`);
+
+  try {
+    // The lock holder before us may have just finished starting it.
+    const again = await probeServer(url, credentials);
+    if (again.state === "ok") return { url, alreadyRunning: true, credentials };
+    if (again.state !== "down") throw new Error(describeProbeFailure(again.state, url));
+
+    const spec = await opencodeSpawnSpec(["serve", "--hostname", host, "--port", String(port)]);
+    const proc = spawn(spec.command, spec.args, {
+      stdio: "ignore",
+      detached: true,
+      cwd: opts.cwd,
+      shell: spec.shell,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        OPENCODE_SERVER_USERNAME: credentials.username,
+        OPENCODE_SERVER_PASSWORD: credentials.password,
+      },
+    });
+    proc.unref();
+
+    try {
+      await waitForServer({ url, credentials, proc });
+    } catch (err) {
+      // Don't leave a half-started server holding the port.
+      try { proc.kill(); } catch { /* already gone */ }
+      throw err;
+    }
+    return { url, pid: proc.pid, alreadyRunning: false, credentials };
+  } finally {
+    releaseStartLock(lock);
+  }
+}
+
+/**
+ * Wait until the spawned server answers, failing fast if the process errors
+ * out or exits first.
+ * @param {object} o
+ * @param {string} o.url
+ * @param {object} o.credentials
+ * @param {import("node:events").EventEmitter} o.proc - the spawned child
+ * @param {number} [o.timeoutMs]
+ * @param {number} [o.intervalMs]
+ * @param {typeof probeServer} [o.probe]
+ * @returns {Promise<void>}
+ */
+export async function waitForServer({
+  url,
+  credentials,
+  proc,
+  timeoutMs = SERVER_START_TIMEOUT,
+  intervalMs = 500,
+  probe = probeServer,
+}) {
+  let failure = null;
+  proc.once("error", (err) => { failure = `could not start opencode: ${err.message}`; });
+  proc.once("exit", (code, signal) => {
+    failure = `opencode serve exited before it was ready (${signal ? `signal ${signal}` : `exit code ${code}`})`;
+  });
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    if (failure) throw new Error(failure);
+    const state = (await probe(url, credentials)).state;
+    if (state === "ok") return;
+    if (state !== "down") throw new Error(describeProbeFailure(state, url));
+  }
+  throw new Error(`OpenCode server failed to start within ${timeoutMs / 1000}s`);
+}
+
+// A lock older than this is from a process that died mid-start.
+const STALE_LOCK_MS = SERVER_START_TIMEOUT + 10_000;
+
+/**
+ * @param {number} port
+ * @returns {string}
+ */
+export function startLockPath(port) {
+  return path.join(stateBase(), `server-start-${port}.lock`);
+}
+
+/**
+ * Take the server-start lock (an atomically created directory). A stale lock
+ * left by a crashed process is broken and retaken.
+ * @param {string} lock
+ * @returns {boolean}
+ */
+export function acquireStartLock(lock) {
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  try {
+    fs.mkdirSync(lock);
+    return true;
+  } catch (err) {
+    if (err.code !== "EEXIST") throw err;
+  }
+  try {
+    if (Date.now() - fs.statSync(lock).mtimeMs > STALE_LOCK_MS) {
+      fs.rmSync(lock, { recursive: true, force: true });
+      fs.mkdirSync(lock);
+      return true;
+    }
+  } catch {
+    // Another process broke or retook it first
+  }
+  return false;
+}
+
+/**
+ * @param {string} lock
+ */
+export function releaseStartLock(lock) {
+  fs.rmSync(lock, { recursive: true, force: true });
 }
 
 // ------------------------------------------------------------------
@@ -234,6 +360,14 @@ export function parseModelRef(ref) {
   const i = ref.indexOf("/");
   if (i <= 0 || i === ref.length - 1) return null;
   return { providerID: ref.slice(0, i), id: ref.slice(i + 1) };
+}
+
+/**
+ * @param {string} ref
+ * @returns {string}
+ */
+export function invalidModelMessage(ref) {
+  return `Invalid --model "${ref}": expected provider/model (e.g. opencode/mimo-v2.6-flash-free)`;
 }
 
 /**
@@ -343,10 +477,9 @@ export function createClient(baseUrl = DEFAULT_BASE_URL, opts = {}) {
     }
     const text = await res.text().catch(() => "");
     if (!res.ok) {
-      throw classifyError(
-        new Error(`OpenCode API ${method} ${urlPath} returned ${res.status}: ${text.slice(0, 500)}`),
-        { baseUrl, startedAt, timeoutMs, op: `request ${method} ${urlPath}` },
-      );
+      const err = new Error(`OpenCode API ${method} ${urlPath} returned ${res.status}: ${text.slice(0, 500)}`);
+      err.status = res.status;
+      throw classifyError(err, { baseUrl, startedAt, timeoutMs, op: `request ${method} ${urlPath}` });
     }
     if (!text) return null;
     try {
@@ -371,8 +504,11 @@ export function createClient(baseUrl = DEFAULT_BASE_URL, opts = {}) {
     createSession: async (o = {}) => {
       const body = { title: o.title };
       if (o.agent) body.agent = o.agent;
-      const model = parseModelRef(o.model);
-      if (model) body.model = model;
+      if (o.model) {
+        const model = parseModelRef(o.model);
+        if (!model) throw new Error(invalidModelMessage(o.model));
+        body.model = model;
+      }
       if (directory) body.location = { directory };
       if (o.write) body.permissions = ALLOW_ALL_PERMISSIONS;
       return (await request("POST", "/api/session", body)).data;
