@@ -1,5 +1,7 @@
 # OpenCode plugin for Claude Code
 
+English | [繁體中文](README.zh-TW.md)
+
 > **Tribute**: This project is inspired by and pays homage to
 > [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) by OpenAI.
 > The plugin architecture, command structure, and design patterns are derived from
@@ -260,7 +262,8 @@ opencode-plugin-cc/
 ├── tests/                               # Test suite
 ├── LICENSE                              # Apache License 2.0
 ├── NOTICE                               # Attribution notice
-└── README.md
+├── README.md
+└── README.zh-TW.md                       # Traditional Chinese README
 ```
 
 ## OpenCode Integration
