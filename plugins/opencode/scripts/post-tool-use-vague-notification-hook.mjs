@@ -16,31 +16,11 @@
 // hook is a belt-and-suspenders safety net for the main thread so it
 // never silently accepts a vague "completion" as real.
 
-import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-function readHookInput() {
-  try {
-    const raw = fs.readFileSync(0, "utf8").trim();
-    if (!raw) return {};
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-}
-
-function extractResponseText(response) {
-  if (response == null) return "";
-  if (typeof response === "string") return response;
-  if (typeof response === "object") {
-    if (typeof response.result === "string") return response.result;
-    if (typeof response.content === "string") return response.content;
-    return JSON.stringify(response);
-  }
-  return String(response);
-}
+import { readHookInput, responseText } from "./lib/hook-io.mjs";
 
 // Heuristics — any one of these patterns anywhere in the response text
 // marks it as a vague placeholder. These are phrases the rescue subagent
@@ -84,7 +64,7 @@ function resolveCompanionPath() {
 function buildReminder(taskIds, companionPath) {
   const idLine = taskIds.length
     ? `Likely task id(s) seen in response: ${taskIds.join(", ")}.`
-    : "No task id was visible in the vague response — check most recent companion job with `node \"" + companionPath + "\" list` style introspection (or `ls -t /Users/harvest/.claude/plugins/data/opencode-tasict-*/state/*/jobs/*.log | head -3`).";
+    : `No task id was visible in the vague response — find the most recent job with \`node "${companionPath}" status --json\`.`;
   return [
     "<opencode-vague-notification-detected>",
     "The rescue subagent you just dispatched returned a placeholder string instead of the companion's rendered terminal report. Do NOT treat this as a completed task.",
@@ -113,7 +93,7 @@ function main() {
   // Vague notifications come from the Agent wrapper's summary text.
   if (toolName !== "Agent") return;
 
-  const response = extractResponseText(input.tool_response);
+  const response = responseText(input.tool_response);
   if (!response) return;
 
   // Must smell like an opencode response at all.

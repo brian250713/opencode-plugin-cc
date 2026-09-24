@@ -11,43 +11,11 @@
 // makes every rescue dispatch automatically get monitored and reported
 // on, matching the UX of in-process subagents.
 
-import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-function readHookInput() {
-  try {
-    const raw = fs.readFileSync(0, "utf8").trim();
-    if (!raw) return {};
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-}
-
-// Companion task ids look like `task-moNNNNNN-NNNNNN`.
-const TASK_ID_RE = /\btask-[a-z0-9]{6,}-[a-z0-9]{4,}\b/g;
-
-// Only react to responses that are unambiguously from the opencode companion,
-// to avoid false positives on arbitrary text containing a task-like token.
-const OPENCODE_MARKERS = [
-  /OpenCode task started/i,
-  /opencode-companion\.mjs/,
-  /opencode:opencode-rescue/,
-  /opencode rescue/i,
-];
-
-function extractResponseText(response) {
-  if (response == null) return "";
-  if (typeof response === "string") return response;
-  if (typeof response === "object") {
-    if (typeof response.result === "string") return response.result;
-    if (typeof response.content === "string") return response.content;
-    return JSON.stringify(response);
-  }
-  return String(response);
-}
+import { readHookInput, responseText, findDispatchedTaskIds } from "./lib/hook-io.mjs";
 
 function resolveCompanionPath() {
   const here = fileURLToPath(import.meta.url);
@@ -178,11 +146,7 @@ function main() {
   // also call companion directly via Bash. Ignore other tools.
   if (toolName !== "Agent" && toolName !== "Bash") return;
 
-  const response = extractResponseText(input.tool_response);
-  if (!response) return;
-  if (!OPENCODE_MARKERS.some((r) => r.test(response))) return;
-
-  const ids = [...new Set(response.match(TASK_ID_RE) || [])];
+  const ids = findDispatchedTaskIds(responseText(input.tool_response));
   if (ids.length === 0) return;
 
   const companionPath = resolveCompanionPath();
