@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Claude Code plugin (`opencode`, marketplace `tasict-opencode-plugin-cc`) that lets Claude delegate tasks and code reviews to [OpenCode](https://github.com/anomalyco/opencode) **v2** (npm `@opencode/cli`; v1 `opencode-ai` is not supported). It is a port of OpenAI's `codex-plugin-cc`; many comments reference the codex equivalents. Pure Node.js ESM (`.mjs`), no runtime dependencies, Node >= 18.18.
+A Claude Code plugin (`opencode`, marketplace `brian250713-opencode-plugin-cc`) that lets Claude delegate tasks and code reviews to [OpenCode](https://github.com/anomalyco/opencode) **v2** (npm `@opencode/cli`; v1 `opencode-ai` is not supported). It is a port of OpenAI's `codex-plugin-cc`; many comments reference the codex equivalents. Pure Node.js ESM (`.mjs`), no runtime dependencies, Node >= 18.18.
 
 ## Commands
 

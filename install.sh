@@ -10,7 +10,9 @@ set -euo pipefail
 
 REPO="brian250713/opencode-plugin-cc"
 PLUGIN_NAME="opencode"
-MARKETPLACE_NAME="tasict-opencode-plugin-cc"
+MARKETPLACE_NAME="brian250713-opencode-plugin-cc"
+# Marketplace name used before the repo was detached from tasict/opencode-plugin-cc.
+LEGACY_MARKETPLACE_NAME="tasict-opencode-plugin-cc"
 BRANCH="main"
 
 CLAUDE_DIR="$HOME/.claude"
@@ -56,7 +58,9 @@ fi
 PLUGIN_JSON="$MKT_DIR/plugins/$PLUGIN_NAME/.claude-plugin/plugin.json"
 [ -f "$PLUGIN_JSON" ] || error "plugin.json not found at $PLUGIN_JSON"
 
-VERSION=$(python3 -c "import json; print(json.load(open('$PLUGIN_JSON'))['version'])" 2>/dev/null || echo "1.0.0")
+# Paths go through argv: Git Bash converts them for a native Windows python3,
+# but not when they are embedded in the script text.
+VERSION=$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['version'])" "$PLUGIN_JSON" 2>/dev/null || echo "1.0.0")
 GIT_SHA=$(git -C "$MKT_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
@@ -74,43 +78,100 @@ if [ ! -f "$KNOWN_MKT" ]; then
   echo '{}' > "$KNOWN_MKT"
 fi
 
-python3 -c "
-import json, sys
-with open('$KNOWN_MKT', 'r') as f:
+python3 - "$KNOWN_MKT" "$MKT_DIR" <<PY || warn "Could not update known_marketplaces.json (non-fatal)"
+import json, os, sys
+path, location = sys.argv[1:3]
+with open(path, encoding="utf-8") as f:
     data = json.load(f)
-data['$MARKETPLACE_NAME'] = {
-    'source': {'source': 'github', 'repo': '$REPO'},
-    'installLocation': '$MKT_DIR',
-    'lastUpdated': '$NOW'
+data["$MARKETPLACE_NAME"] = {
+    "source": {"source": "github", "repo": "$REPO"},
+    "installLocation": os.path.normpath(location),
+    "lastUpdated": "$NOW",
 }
-with open('$KNOWN_MKT', 'w') as f:
-    json.dump(data, f, indent=2)
-    f.write('\n')
-" || warn "Could not update known_marketplaces.json (non-fatal)"
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+PY
 
 # --- Step 5: Register plugin in installed_plugins.json ---
 if [ ! -f "$INSTALLED" ]; then
   echo '{"version": 2, "plugins": {}}' > "$INSTALLED"
 fi
 
-python3 -c "
-import json
-with open('$INSTALLED', 'r') as f:
+python3 - "$INSTALLED" "$CACHE_VERSION_DIR" <<PY || error "Failed to update installed_plugins.json"
+import json, os, sys
+path, install_path = sys.argv[1:3]
+with open(path, encoding="utf-8") as f:
     data = json.load(f)
-if 'plugins' not in data:
-    data['plugins'] = {}
-data['plugins']['$PLUGIN_NAME@$MARKETPLACE_NAME'] = [{
-    'scope': 'user',
-    'installPath': '$CACHE_VERSION_DIR',
-    'version': '$VERSION',
-    'installedAt': '$NOW',
-    'lastUpdated': '$NOW',
-    'gitCommitSha': '$GIT_SHA'
+data.setdefault("plugins", {})["$PLUGIN_NAME@$MARKETPLACE_NAME"] = [{
+    "scope": "user",
+    "installPath": os.path.normpath(install_path),
+    "version": "$VERSION",
+    "installedAt": "$NOW",
+    "lastUpdated": "$NOW",
+    "gitCommitSha": "$GIT_SHA",
 }]
-with open('$INSTALLED', 'w') as f:
-    json.dump(data, f, indent=2)
-    f.write('\n')
-" || error "Failed to update installed_plugins.json"
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+PY
+
+# --- Step 6: Migrate from the legacy marketplace name ---
+# Without this, an existing install keeps loading next to the new one (every
+# /opencode:* command twice), and the companion loses its data dir, including
+# the server password a still-running `opencode serve` was started with.
+LEGACY_DATA="$CLAUDE_DIR/plugins/data/$PLUGIN_NAME-$LEGACY_MARKETPLACE_NAME"
+NEW_DATA="$CLAUDE_DIR/plugins/data/$PLUGIN_NAME-$MARKETPLACE_NAME"
+if [ -d "$LEGACY_DATA" ] && [ ! -e "$NEW_DATA" ]; then
+  mv "$LEGACY_DATA" "$NEW_DATA" && info "Moved plugin data to $NEW_DATA"
+fi
+
+LEGACY_MKT_DIR="$MARKETPLACES_DIR/${LEGACY_MARKETPLACE_NAME:?}"
+LEGACY_CACHE_DIR="$CLAUDE_DIR/plugins/cache/${LEGACY_MARKETPLACE_NAME:?}"
+if [ -d "$LEGACY_MKT_DIR" ] || [ -d "$LEGACY_CACHE_DIR" ]; then
+  rm -rf "$LEGACY_MKT_DIR" "$LEGACY_CACHE_DIR"
+  info "Removed legacy $LEGACY_MARKETPLACE_NAME marketplace files."
+fi
+
+python3 - "$KNOWN_MKT" "$INSTALLED" "$CLAUDE_DIR/settings.json" <<PY || warn "Could not migrate legacy plugin registration (non-fatal)"
+import json, os, sys
+known, installed, settings = sys.argv[1:4]
+old_mkt, new_mkt = "$LEGACY_MARKETPLACE_NAME", "$MARKETPLACE_NAME"
+old_plugin, new_plugin = "$PLUGIN_NAME@" + old_mkt, "$PLUGIN_NAME@" + new_mkt
+
+def update(path, fn):
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    if fn(data):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+
+def known_fn(d):
+    return d.pop(old_mkt, None) is not None
+
+def installed_fn(d):
+    return d.get("plugins", {}).pop(old_plugin, None) is not None
+
+def settings_fn(d):
+    changed = False
+    enabled = d.get("enabledPlugins")
+    if isinstance(enabled, dict) and old_plugin in enabled:
+        enabled.setdefault(new_plugin, enabled.pop(old_plugin))
+        changed = True
+    extra = d.get("extraKnownMarketplaces")
+    if isinstance(extra, dict) and old_mkt in extra:
+        extra.pop(old_mkt)
+        extra.setdefault(new_mkt, {"source": {"source": "github", "repo": "$REPO"}})
+        changed = True
+    return changed
+
+update(known, known_fn)
+update(installed, installed_fn)
+update(settings, settings_fn)
+PY
 
 # --- Done ---
 echo ""
