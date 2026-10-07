@@ -7,8 +7,7 @@
 > 並改為搭配 [OpenCode](https://github.com/anomalyco/opencode) 而非 Codex 使用。
 >
 > 本儲存庫最初 fork 自 [tasict/opencode-plugin-cc](https://github.com/tasict/opencode-plugin-cc)，
-> 現已獨立維護。感謝原專案的作者與貢獻者。為了讓既有安裝繼續運作，
-> marketplace 名稱仍保留為 `tasict-opencode-plugin-cc`。
+> 現已獨立維護。感謝原專案的作者與貢獻者。
 
 在 Claude Code 中使用 OpenCode 進行程式碼審查，或把任務委派給它。
 
@@ -24,7 +23,7 @@ npm i -g @opencode/cli --allow-scripts=@opencode/cli
 # 2. 安裝外掛（見下方「安裝」一節）
 
 # 3. 執行自我檢測
-node ~/.claude/plugins/cache/tasict-opencode-plugin-cc/opencode/2.0.3/scripts/opencode-companion.mjs doctor
+node ~/.claude/plugins/cache/brian250713-opencode-plugin-cc/opencode/2.0.4/scripts/opencode-companion.mjs doctor
 ```
 
 接著就能在 Claude Code 中委派任務：
@@ -79,6 +78,10 @@ Reloaded: 1 plugin · 7 skills · 6 agents · 3 hooks ...
 > **安裝程式做了什麼**：將 repo clone 到 `~/.claude/plugins/marketplaces/`，
 > 快取外掛檔案，並註冊到 Claude Code 的外掛設定中。
 > 它會先嘗試 SSH，失敗時自動改用 HTTPS。
+>
+> **從 `tasict-opencode-plugin-cc` 升級**：marketplace 已改名為 `brian250713-opencode-plugin-cc`。
+> 重新執行安裝程式即可自動遷移舊安裝：移除舊的註冊與檔案、更新 `~/.claude/settings.json` 中的外掛項目，
+> 並搬移外掛資料目錄（工作紀錄、review gate 設定、server 密碼）。
 
 ### 設定 AI 供應商
 
@@ -97,7 +100,7 @@ Reloaded: 1 plugin · 7 skills · 6 agents · 3 hooks ...
 ### 解除安裝
 
 ```
-/plugin uninstall opencode@tasict-opencode-plugin-cc
+/plugin uninstall opencode@brian250713-opencode-plugin-cc
 /reload-plugins
 ```
 

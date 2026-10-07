@@ -10,8 +10,7 @@ English | [繁體中文](README.zh-TW.md)
 >
 > This repository started as a fork of
 > [tasict/opencode-plugin-cc](https://github.com/tasict/opencode-plugin-cc) and is now
-> maintained independently. Thanks to its original authors and contributors. The marketplace
-> name `tasict-opencode-plugin-cc` is kept so existing installs keep working.
+> maintained independently. Thanks to its original authors and contributors.
 
 Use OpenCode from inside Claude Code for code reviews or to delegate tasks.
 
@@ -28,7 +27,7 @@ npm i -g @opencode/cli --allow-scripts=@opencode/cli
 # 2. Install the plugin (see Install section below)
 
 # 3. Run the self-test
-node ~/.claude/plugins/cache/tasict-opencode-plugin-cc/opencode/2.0.3/scripts/opencode-companion.mjs doctor
+node ~/.claude/plugins/cache/brian250713-opencode-plugin-cc/opencode/2.0.4/scripts/opencode-companion.mjs doctor
 ```
 
 Then delegate a task from Claude Code:
@@ -83,6 +82,11 @@ Finally, verify your setup:
 > **What the installer does**: Clones the repo to `~/.claude/plugins/marketplaces/`,
 > caches the plugin files, and registers it in Claude Code's plugin config.
 > It tries SSH first and falls back to HTTPS automatically.
+>
+> **Upgrading from `tasict-opencode-plugin-cc`**: the marketplace is now named
+> `brian250713-opencode-plugin-cc`. Re-run the installer and it migrates the old install:
+> it removes the old registration and files, renames the plugin entries in
+> `~/.claude/settings.json`, and moves the plugin data dir (jobs, review gate setting, server password).
 
 ### Set up an AI Provider
 
@@ -101,7 +105,7 @@ To check your configured providers:
 ### Uninstall
 
 ```
-/plugin uninstall opencode@tasict-opencode-plugin-cc
+/plugin uninstall opencode@brian250713-opencode-plugin-cc
 /reload-plugins
 ```
 
