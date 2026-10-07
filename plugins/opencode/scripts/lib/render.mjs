@@ -182,6 +182,9 @@ export function renderTrace(messages) {
       case "shell":
         lines.push(`[${ts}] shell/${m.status}: ${clip(m.command, 160)}`);
         break;
+      case "synthetic":
+        lines.push(`[${ts}] synthetic: ${clip(m.text)}`);
+        break;
       case "idle":
         lines.push(`[${ts}] idle: ${m.outcome}`);
         break;

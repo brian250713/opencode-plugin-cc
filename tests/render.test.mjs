@@ -109,6 +109,12 @@ describe("renderTrace", () => {
     assert.match(output, /error: 403 free tier/);
   });
 
+  it("shows synthetic messages", () => {
+    const at = Date.UTC(2026, 0, 1, 12, 0, 5);
+    const output = renderTrace([{ type: "synthetic", time: { created: at }, text: "<system-reminder>\nYou are in Plan mode.\n</system-reminder>" }]);
+    assert.equal(output, "[12:00:05] synthetic: <system-reminder> You are in Plan mode. </system-reminder>");
+  });
+
   it("handles an empty session", () => {
     assert.equal(renderTrace([]), "(no activity)");
   });
