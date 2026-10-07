@@ -24,7 +24,7 @@ npm i -g @opencode/cli --allow-scripts=@opencode/cli
 # 2. 安裝外掛（見下方「安裝」一節）
 
 # 3. 執行自我檢測
-node ~/.claude/plugins/cache/tasict-opencode-plugin-cc/opencode/2.0.2/scripts/opencode-companion.mjs doctor
+node ~/.claude/plugins/cache/tasict-opencode-plugin-cc/opencode/2.0.3/scripts/opencode-companion.mjs doctor
 ```
 
 接著就能在 Claude Code 中委派任務：
