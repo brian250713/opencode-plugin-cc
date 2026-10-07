@@ -7,6 +7,11 @@ English | [繁體中文](README.zh-TW.md)
 > The plugin architecture, command structure, and design patterns are derived from
 > the original codex-plugin-cc project, adapted to work with
 > [OpenCode](https://github.com/anomalyco/opencode) instead of Codex.
+>
+> This repository started as a fork of
+> [tasict/opencode-plugin-cc](https://github.com/tasict/opencode-plugin-cc) and is now
+> maintained independently. Thanks to its original authors and contributors. The marketplace
+> name `tasict-opencode-plugin-cc` is kept so existing installs keep working.
 
 Use OpenCode from inside Claude Code for code reviews or to delegate tasks.
 
@@ -54,7 +59,7 @@ generates and keeps in the plugin data dir. If `opencode` prints
 Inside Claude Code, run:
 
 ```
-! curl -fsSL https://raw.githubusercontent.com/tasict/opencode-plugin-cc/main/install.sh | bash
+! curl -fsSL https://raw.githubusercontent.com/brian250713/opencode-plugin-cc/main/install.sh | bash
 ```
 
 Then reload the plugin:
@@ -182,7 +187,7 @@ Run `companion.mjs config` to see resolved values with source (env vs default).
 <details>
 <summary><strong>Plugin not loading after install (0 plugins)</strong></summary>
 
-1. Re-run the installer: `! curl -fsSL https://raw.githubusercontent.com/tasict/opencode-plugin-cc/main/install.sh | bash`
+1. Re-run the installer: `! curl -fsSL https://raw.githubusercontent.com/brian250713/opencode-plugin-cc/main/install.sh | bash`
 2. Run `/reload-plugins` again.
 3. If still failing, restart Claude Code.
 </details>

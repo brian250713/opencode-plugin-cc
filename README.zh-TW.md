@@ -5,6 +5,10 @@
 > **致敬**：本專案受 OpenAI 的 [codex-plugin-cc](https://github.com/openai/codex-plugin-cc)
 > 啟發並向其致敬。外掛架構、指令結構與設計模式皆源自原本的 codex-plugin-cc 專案，
 > 並改為搭配 [OpenCode](https://github.com/anomalyco/opencode) 而非 Codex 使用。
+>
+> 本儲存庫最初 fork 自 [tasict/opencode-plugin-cc](https://github.com/tasict/opencode-plugin-cc)，
+> 現已獨立維護。感謝原專案的作者與貢獻者。為了讓既有安裝繼續運作，
+> marketplace 名稱仍保留為 `tasict-opencode-plugin-cc`。
 
 在 Claude Code 中使用 OpenCode 進行程式碼審查，或把任務委派給它。
 
@@ -51,7 +55,7 @@ companion 會在第一次使用時於 `127.0.0.1:4096` 啟動 `opencode serve`�
 在 Claude Code 中執行：
 
 ```
-! curl -fsSL https://raw.githubusercontent.com/tasict/opencode-plugin-cc/main/install.sh | bash
+! curl -fsSL https://raw.githubusercontent.com/brian250713/opencode-plugin-cc/main/install.sh | bash
 ```
 
 接著重新載入外掛：
@@ -174,7 +178,7 @@ companion 現在會自動修正這種情況：
 <details>
 <summary><strong>安裝後外掛沒有載入（0 plugins）</strong></summary>
 
-1. 重新執行安裝程式：`! curl -fsSL https://raw.githubusercontent.com/tasict/opencode-plugin-cc/main/install.sh | bash`
+1. 重新執行安裝程式：`! curl -fsSL https://raw.githubusercontent.com/brian250713/opencode-plugin-cc/main/install.sh | bash`
 2. 再執行一次 `/reload-plugins`。
 3. 若仍失敗，請重新啟動 Claude Code。
 </details>
