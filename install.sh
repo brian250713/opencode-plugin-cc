@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # One-line installer for opencode-plugin-cc
 # Usage (inside Claude Code):
-#   ! curl -fsSL https://raw.githubusercontent.com/tasict/opencode-plugin-cc/main/install.sh | bash
+#   ! curl -fsSL https://raw.githubusercontent.com/brian250713/opencode-plugin-cc/main/install.sh | bash
 #
 # Or clone + run locally:
-#   ! bash <(curl -fsSL https://raw.githubusercontent.com/tasict/opencode-plugin-cc/main/install.sh)
+#   ! bash <(curl -fsSL https://raw.githubusercontent.com/brian250713/opencode-plugin-cc/main/install.sh)
 
 set -euo pipefail
 
-REPO="tasict/opencode-plugin-cc"
+REPO="brian250713/opencode-plugin-cc"
 PLUGIN_NAME="opencode"
 MARKETPLACE_NAME="tasict-opencode-plugin-cc"
 BRANCH="main"
