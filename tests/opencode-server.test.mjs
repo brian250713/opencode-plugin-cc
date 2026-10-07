@@ -196,6 +196,34 @@ describe("summarizeTurn", () => {
     }];
     assert.deepEqual(summarizeTurn(failed, 1000), { text: "", error: "free tier can only be used from within OpenCode" });
   });
+
+  // opencode 2.0.24, plan agent: the plan-mode reminder is injected as a
+  // synthetic message after the first step. If that step already answered,
+  // the model's reply to the reminder must not replace the answer.
+  it("keeps a text-only answer that a plan-mode reminder follows", () => {
+    const planTurn = [
+      { type: "idle", time: { created: 1400 }, outcome: "succeeded" },
+      { type: "assistant", time: { created: 1300 }, content: [{ type: "text", text: "In Plan mode — ready to discuss your plan." }] },
+      { type: "synthetic", time: { created: 1200 }, text: "<system-reminder>\nYou are in Plan mode.\n</system-reminder>" },
+      { type: "assistant", time: { created: 1100 }, content: [{ type: "reasoning", text: "" }, { type: "text", text: "PONG" }] },
+      { type: "user", time: { created: 1050 }, text: "Reply with PONG" },
+    ];
+    assert.deepEqual(summarizeTurn(planTurn, 1000), { text: "PONG", error: null });
+  });
+
+  it("uses the reply after a plan-mode reminder that interrupted a tool step", () => {
+    const planTurn = [
+      { type: "idle", time: { created: 1400 }, outcome: "succeeded" },
+      { type: "assistant", time: { created: 1300 }, content: [{ type: "text", text: "2.0.2" }] },
+      { type: "synthetic", time: { created: 1200 }, text: "<system-reminder>\nYou are in Plan mode.\n</system-reminder>" },
+      {
+        type: "assistant", time: { created: 1100 },
+        content: [{ type: "text", text: "I'll read package.json." }, { type: "tool", name: "read", state: { status: "completed" } }],
+      },
+      { type: "user", time: { created: 1050 }, text: "What version?" },
+    ];
+    assert.deepEqual(summarizeTurn(planTurn, 1000), { text: "2.0.2", error: null });
+  });
 });
 
 describe("describeLastActivity", () => {

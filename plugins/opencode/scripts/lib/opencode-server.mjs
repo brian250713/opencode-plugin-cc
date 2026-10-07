@@ -399,19 +399,31 @@ export function assistantText(msg) {
  * Summarize the turn that started at `sinceMs` from a message list (any order).
  * The reply is the last assistant message with visible text; errors come from
  * the assistant messages' `error` field.
+ *
+ * opencode (seen in 2.0.24) injects the plan-mode reminder as a `synthetic`
+ * message after the plan agent's first step. When that step was already a
+ * final answer (text, no tool calls), the model replies to the reminder with
+ * an acknowledgement, so the answer before the reminder wins.
  * @param {object[]} messages - Session.Message.Info[]
  * @param {number} sinceMs
  * @returns {{ text: string, error: string | null }}
  */
 export function summarizeTurn(messages, sinceMs) {
   const turn = (messages ?? [])
-    .filter((m) => m?.type === "assistant" && (m.time?.created ?? 0) >= sinceMs)
+    .filter((m) => (m?.type === "assistant" || m?.type === "synthetic") && (m.time?.created ?? 0) >= sinceMs)
     .sort((a, b) => (a.time?.created ?? 0) - (b.time?.created ?? 0));
   let text = "";
   let error = null;
+  let answered = false;
+  let prev = null;
   for (const m of turn) {
+    if (m.type === "synthetic") {
+      if (text && prev && !prev.content?.some((c) => c?.type === "tool")) answered = true;
+      continue;
+    }
+    prev = m;
     const t = assistantText(m);
-    if (t) text = t;
+    if (t && !answered) text = t;
     if (m.error?.message) error = m.error.message;
   }
   return { text, error };
