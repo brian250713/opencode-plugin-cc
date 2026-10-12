@@ -8,19 +8,32 @@ user-invocable: false
 
 ## Result Structure
 
-OpenCode returns results as structured session data containing:
-- **Messages**: The full conversation between the user prompt and OpenCode's agent
-- **Tool calls**: All tool invocations (bash, edit, read, write, grep, glob, etc.)
-- **File changes**: Diffs of all files modified during the session
-- **Status**: Whether the session completed successfully, was aborted, or errored
+`companion result <task-id>` (and `wait-and-result` once the job is terminal) prints a markdown report:
+
+```
+## Job: task-mv51p70y-r4pcdw
+
+- **Type**: task
+- **Status**: completed            ← completed | failed | cancelled
+- **Duration**: 8s
+- **OpenCode Session**: ses_...    ← only once a session was created
+
+### Output                         ← "### Error" instead when Status is failed
+
+<final assistant reply text>
+
+### Changed Files                  ← foreground write tasks only
+- path/to/file
+```
+
+It carries only the final assistant reply, not the full message list or tool calls. For those, use `companion trace <task-id>` (see Layer 2 below). Background tasks do not list changed files; check `git status` / `git diff` in the workspace if you need them.
 
 ## Presenting Results
 
-When displaying results from `/opencode:result`:
-1. Show the session ID for reference
-2. Present the final assistant message as the primary output
-3. If file changes were made, summarize which files were modified
-4. Include the session status (completed/aborted/error)
+- `/opencode:result` and the `opencode:opencode-rescue` subagent return this report **verbatim**. Do not paraphrase, summarize, or reformat it there.
+- In the main thread, after the verbatim report, you may add your own short follow-up (e.g. what to verify next). Keep it clearly separate from the report.
+- If Status is `failed`, surface the `### Error` text as-is; do not retry or fix the problem unless the user asks.
+- Mention the OpenCode session id when the user may want to resume (`--resume`).
 
 ## Resuming Sessions
 
