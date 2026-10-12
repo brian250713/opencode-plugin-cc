@@ -439,7 +439,7 @@ async function handleTaskWorker(argv) {
       report("finalizing", "Done");
 
       return { rendered: text, summary: text.slice(0, 500) };
-    });
+    }, { echo: false }); // stderr is the job log (spawnDetached)
   } catch (err) {
     // Error is already logged by runTrackedJob
     process.exit(1);
