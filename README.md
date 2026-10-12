@@ -27,7 +27,7 @@ npm i -g @opencode/cli --allow-scripts=@opencode/cli
 # 2. Install the plugin (see Install section below)
 
 # 3. Run the self-test
-node ~/.claude/plugins/cache/brian250713-opencode-plugin-cc/opencode/2.0.4/scripts/opencode-companion.mjs doctor
+node ~/.claude/plugins/cache/brian250713-opencode-plugin-cc/opencode/2.0.5/scripts/opencode-companion.mjs doctor
 ```
 
 Then delegate a task from Claude Code:

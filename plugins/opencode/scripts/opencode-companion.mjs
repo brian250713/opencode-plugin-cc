@@ -89,7 +89,7 @@ async function handleSetup(argv) {
     const probe = await probeServer();
     serverRunning = probe.state === "ok";
     if (probe.state !== "ok" && probe.state !== "down") {
-      serverProblem = describeProbeFailure(probe.state, DEFAULT_BASE_URL);
+      serverProblem = describeProbeFailure(probe.state, DEFAULT_BASE_URL, probe.detail);
     }
 
     if (serverRunning) {
@@ -869,7 +869,7 @@ async function handleDoctor(argv) {
   } else if (probe.state === "down") {
     push("opencode-server", "PASS", `${DEFAULT_BASE_URL} not running — started on demand`, null);
   } else {
-    push("opencode-server", "FAIL", describeProbeFailure(probe.state, DEFAULT_BASE_URL), null);
+    push("opencode-server", "FAIL", describeProbeFailure(probe.state, DEFAULT_BASE_URL, probe.detail), null);
   }
 
   // 5. CLAUDE_PLUGIN_DATA sanity check

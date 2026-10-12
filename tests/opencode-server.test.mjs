@@ -17,6 +17,8 @@ import {
   authHeaders,
   classifyInfoResponse,
   probeServer,
+  probeSettled,
+  describeProbeFailure,
   parseModelRef,
   isTurnDone,
   summarizeTurn,
@@ -133,6 +135,12 @@ describe("probeServer", () => {
     assert.equal(r.state, "unauthorized");
   });
 
+  it("reports what an incompatible server answered", async () => {
+    const r = await probeServer(`${baseUrl}/web`, creds);
+    assert.equal(r.state, "incompatible");
+    assert.equal(r.detail, "HTTP 200, text/html");
+  });
+
   it("is down when nothing listens", async () => {
     const port = server.address().port;
     await new Promise((r) => server.close(r));
@@ -140,6 +148,39 @@ describe("probeServer", () => {
     await new Promise((r) => server.listen(0, "127.0.0.1", r));
     const r = await probeServer(`http://127.0.0.1:${port}`, creds);
     assert.equal(r.state, "down");
+  });
+});
+
+describe("probeSettled", () => {
+  it("re-probes a transient incompatible answer", async () => {
+    let calls = 0;
+    const probe = async () => (++calls < 3 ? { state: "incompatible", detail: "HTTP 503, text/html" } : { state: "down" });
+    const r = await probeSettled("http://x", null, { probe, graceMs: 1000, intervalMs: 1 });
+    assert.equal(r.state, "down");
+    assert.equal(calls, 3);
+  });
+
+  it("gives up after the grace period", async () => {
+    const probe = async () => ({ state: "incompatible", detail: "HTTP 404, text/plain" });
+    const r = await probeSettled("http://x", null, { probe, graceMs: 20, intervalMs: 5 });
+    assert.equal(r.state, "incompatible");
+    assert.equal(r.detail, "HTTP 404, text/plain");
+  });
+
+  it("does not retry other states", async () => {
+    let calls = 0;
+    const probe = async () => { calls++; return { state: "unauthorized" }; };
+    const r = await probeSettled("http://x", null, { probe, graceMs: 1000, intervalMs: 1 });
+    assert.equal(r.state, "unauthorized");
+    assert.equal(calls, 1);
+  });
+});
+
+describe("describeProbeFailure", () => {
+  it("includes what an incompatible server answered", () => {
+    const msg = describeProbeFailure("incompatible", "http://127.0.0.1:4096", "HTTP 503, text/html");
+    assert.match(msg, /got HTTP 503, text\/html/);
+    assert.match(msg, /Another program may be using that port/);
   });
 });
 
@@ -296,6 +337,37 @@ describe("waitForServer", () => {
     await assert.rejects(
       waitForServer({ ...base, proc, probe: async () => ({ state: "down" }) }),
       /exited before it was ready \(exit code 1\)/,
+    );
+  });
+
+  it("tolerates a brief incompatible answer while starting", async () => {
+    let calls = 0;
+    const probe = async () => (++calls < 3 ? { state: "incompatible", detail: "HTTP 503, text/html" } : { state: "ok" });
+    await waitForServer({ ...base, proc: new EventEmitter(), probe, incompatibleGraceMs: 1000 });
+    assert.equal(calls, 3);
+  });
+
+  it("fails when the port keeps answering like a non-v2 server", async () => {
+    await assert.rejects(
+      waitForServer({
+        ...base,
+        proc: new EventEmitter(),
+        probe: async () => ({ state: "incompatible", detail: "HTTP 404, text/plain" }),
+        incompatibleGraceMs: 50,
+      }),
+      /did not answer GET \/api\/info like an OpenCode v2 server \(got HTTP 404, text\/plain\)/,
+    );
+  });
+
+  it("blames the port holder when serve exits while it answers", async () => {
+    const proc = new EventEmitter();
+    const probe = async () => {
+      setImmediate(() => proc.emit("exit", 1, null));
+      return { state: "incompatible", detail: "HTTP 404, text/plain" };
+    };
+    await assert.rejects(
+      waitForServer({ ...base, proc, probe, incompatibleGraceMs: 1000 }),
+      /got HTTP 404, text\/plain/,
     );
   });
 
