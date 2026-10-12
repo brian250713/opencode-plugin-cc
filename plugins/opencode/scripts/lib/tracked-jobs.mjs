@@ -41,9 +41,13 @@ export function createJobRecord(workspacePath, type, meta = {}) {
  * @param {string} workspacePath
  * @param {object} job
  * @param {(ctx: { report: Function, log: Function }) => Promise<object>} runner
+ * @param {object} [opts]
+ * @param {boolean} [opts.echo] - also write progress lines to stderr. A
+ *   background worker passes false: its stderr is already the job log, so
+ *   echoing would write every line twice.
  * @returns {Promise<object>} the job result
  */
-export async function runTrackedJob(workspacePath, job, runner) {
+export async function runTrackedJob(workspacePath, job, runner, { echo = true } = {}) {
   // Mark as running
   upsertJob(workspacePath, { id: job.id, status: "running", pid: process.pid });
 
@@ -53,7 +57,7 @@ export async function runTrackedJob(workspacePath, job, runner) {
   const report = (phase, message) => {
     const line = `[${new Date().toISOString()}] [${phase}] ${message}`;
     appendLine(logFile, line);
-    process.stderr.write(line + "\n");
+    if (echo) process.stderr.write(line + "\n");
     upsertJob(workspacePath, { id: job.id, phase });
   };
 
