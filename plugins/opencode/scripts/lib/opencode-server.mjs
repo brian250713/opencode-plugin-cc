@@ -2,7 +2,7 @@
 // Unlike codex-plugin-cc which uses JSON-RPC over stdin/stdout,
 // OpenCode exposes a REST API under /api. This module wraps that API.
 //
-// v2 facts this module relies on (verified against opencode 2.0.15):
+// v2 facts this module relies on (verified against opencode 2.0.15, rechecked on 2.0.26):
 // - Every /api route requires HTTP Basic auth. `opencode serve` generates a
 //   random password unless OPENCODE_SERVER_PASSWORD is set (username
 //   "opencode"), so the companion starts the server with its own password and
@@ -26,6 +26,10 @@ export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PORT = 4096;
 export const DEFAULT_BASE_URL = `http://${DEFAULT_HOST}:${DEFAULT_PORT}`;
 const SERVER_START_TIMEOUT = 30_000;
+// A non-v2 answer on the port is re-probed for this long before it is treated
+// as a real conflict: a server that is booting or shutting down can briefly
+// answer with something other than the /api/info JSON.
+const INCOMPATIBLE_GRACE_MS = 5_000;
 
 const REQUEST_TIMEOUT_MS = Number(process.env.OPENCODE_REQUEST_TIMEOUT_MS) || 1_800_000;
 // Absolute cap on a single prompt turn.
@@ -144,10 +148,11 @@ export function classifyInfoResponse(status, contentType, body) {
 }
 
 /**
- * Probe the server at baseUrl.
+ * Probe the server at baseUrl. An "incompatible" result carries `detail`
+ * (status and content type of the answer) for the error message.
  * @param {string} [baseUrl]
  * @param {{ username: string, password: string } | null} [creds]
- * @returns {Promise<{ state: "ok" | "unauthorized" | "incompatible" | "down", info?: object }>}
+ * @returns {Promise<{ state: "ok" | "unauthorized" | "incompatible" | "down", info?: object, detail?: string }>}
  */
 export async function probeServer(baseUrl = DEFAULT_BASE_URL, creds = resolveCredentials({ create: false })) {
   let res;
@@ -164,7 +169,33 @@ export async function probeServer(baseUrl = DEFAULT_BASE_URL, creds = resolveCre
   let body = text;
   try { body = JSON.parse(text); } catch { /* not JSON */ }
   const state = classifyInfoResponse(res.status, contentType, body);
-  return state === "ok" ? { state, info: body } : { state };
+  if (state === "ok") return { state, info: body };
+  if (state === "incompatible") return { state, detail: `HTTP ${res.status}, ${contentType || "no content type"}` };
+  return { state };
+}
+
+/**
+ * Probe, re-probing an "incompatible" answer until it changes or graceMs runs
+ * out, so a transient answer during another server's start/stop is not fatal.
+ * @param {string} url
+ * @param {object | null} credentials
+ * @param {object} [o]
+ * @param {number} [o.graceMs]
+ * @param {number} [o.intervalMs]
+ * @param {typeof probeServer} [o.probe]
+ */
+export async function probeSettled(url, credentials, {
+  graceMs = INCOMPATIBLE_GRACE_MS,
+  intervalMs = 500,
+  probe = probeServer,
+} = {}) {
+  const deadline = Date.now() + graceMs;
+  let result = await probe(url, credentials);
+  while (result.state === "incompatible" && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    result = await probe(url, credentials);
+  }
+  return result;
 }
 
 /**
@@ -181,17 +212,20 @@ export async function isServerRunning(host = DEFAULT_HOST, port = DEFAULT_PORT) 
  * Human-readable explanation for a non-ok probe state.
  * @param {string} state
  * @param {string} baseUrl
+ * @param {string} [detail] - what the server answered (from probeServer)
  * @returns {string}
  */
-export function describeProbeFailure(state, baseUrl) {
+export function describeProbeFailure(state, baseUrl, detail) {
   switch (state) {
     case "unauthorized":
       return `An OpenCode server at ${baseUrl} rejected the companion's credentials. ` +
         "It was probably started outside the plugin (e.g. `opencode serve` or the background service). " +
         "Stop it so the companion can start its own, or set OPENCODE_SERVER_PASSWORD to its password.";
     case "incompatible":
-      return `The server at ${baseUrl} is not an OpenCode v2 API server. ` +
-        "This plugin requires opencode v2 (npm i -g @opencode/cli); stop any v1 `opencode serve` on that port.";
+      return `The server at ${baseUrl} did not answer GET /api/info like an OpenCode v2 server` +
+        (detail ? ` (got ${detail})` : "") + ". " +
+        "Another program may be using that port, or an opencode v1 `opencode serve` is running there " +
+        "(this plugin requires opencode v2: npm i -g @opencode/cli).";
     case "down":
       return `No OpenCode server is reachable at ${baseUrl}.`;
     default:
@@ -213,17 +247,17 @@ export async function ensureServer(opts = {}) {
   const url = `http://${host}:${port}`;
   const credentials = resolveCredentials();
 
-  const first = await probeServer(url, credentials);
+  const first = await probeSettled(url, credentials);
   if (first.state === "ok") return { url, alreadyRunning: true, credentials };
-  if (first.state !== "down") throw new Error(describeProbeFailure(first.state, url));
+  if (first.state !== "down") throw new Error(describeProbeFailure(first.state, url, first.detail));
 
   // Only one process may spawn the server; the others wait for it to come up.
   const lock = startLockPath(port);
   const deadline = Date.now() + SERVER_START_TIMEOUT;
   while (!acquireStartLock(lock)) {
-    const probe = await probeServer(url, credentials);
+    const probe = await probeSettled(url, credentials);
     if (probe.state === "ok") return { url, alreadyRunning: true, credentials };
-    if (probe.state !== "down") throw new Error(describeProbeFailure(probe.state, url));
+    if (probe.state !== "down") throw new Error(describeProbeFailure(probe.state, url, probe.detail));
     if (Date.now() > deadline) {
       throw new Error(`Timed out waiting for another process to start the OpenCode server (lock: ${lock})`);
     }
@@ -232,9 +266,9 @@ export async function ensureServer(opts = {}) {
 
   try {
     // The lock holder before us may have just finished starting it.
-    const again = await probeServer(url, credentials);
+    const again = await probeSettled(url, credentials);
     if (again.state === "ok") return { url, alreadyRunning: true, credentials };
-    if (again.state !== "down") throw new Error(describeProbeFailure(again.state, url));
+    if (again.state !== "down") throw new Error(describeProbeFailure(again.state, url, again.detail));
 
     const spec = await opencodeSpawnSpec(["serve", "--hostname", host, "--port", String(port)]);
     const proc = spawn(spec.command, spec.args, {
@@ -273,6 +307,7 @@ export async function ensureServer(opts = {}) {
  * @param {import("node:events").EventEmitter} o.proc - the spawned child
  * @param {number} [o.timeoutMs]
  * @param {number} [o.intervalMs]
+ * @param {number} [o.incompatibleGraceMs] - how long a non-v2 answer is tolerated
  * @param {typeof probeServer} [o.probe]
  * @returns {Promise<void>}
  */
@@ -282,6 +317,7 @@ export async function waitForServer({
   proc,
   timeoutMs = SERVER_START_TIMEOUT,
   intervalMs = 500,
+  incompatibleGraceMs = INCOMPATIBLE_GRACE_MS,
   probe = probeServer,
 }) {
   let failure = null;
@@ -291,12 +327,24 @@ export async function waitForServer({
   });
 
   const deadline = Date.now() + timeoutMs;
+  let incompatible = null; // last non-v2 answer, and when it was first seen
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, intervalMs));
-    if (failure) throw new Error(failure);
-    const state = (await probe(url, credentials)).state;
-    if (state === "ok") return;
-    if (state !== "down") throw new Error(describeProbeFailure(state, url));
+    if (failure) {
+      // Our serve likely died because whatever answered holds the port.
+      throw new Error(incompatible ? describeProbeFailure("incompatible", url, incompatible.detail) : failure);
+    }
+    const result = await probe(url, credentials);
+    if (result.state === "ok") return;
+    if (result.state === "incompatible") {
+      incompatible = { since: incompatible?.since ?? Date.now(), detail: result.detail };
+      if (Date.now() - incompatible.since >= incompatibleGraceMs) {
+        throw new Error(describeProbeFailure("incompatible", url, result.detail));
+      }
+      continue;
+    }
+    incompatible = null;
+    if (result.state !== "down") throw new Error(describeProbeFailure(result.state, url));
   }
   throw new Error(`OpenCode server failed to start within ${timeoutMs / 1000}s`);
 }
